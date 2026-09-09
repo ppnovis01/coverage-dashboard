@@ -1,0 +1,11 @@
+# Streamlit appearance settings. "wide" uses the full browser width.
+[theme]
+base = "dark"
+primaryColor = "#4da3ff"
+
+[server]
+headless = true
+runOnSave = false
+
+[browser]
+gatherUsageStats = false

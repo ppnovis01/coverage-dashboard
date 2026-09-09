@@ -1,0 +1,33 @@
+settings:
+  refresh_seconds: 60
+  history_years: 2
+  base_currency: USD          # options: LOCAL, USD, BRL
+  return_type: total          # options: total (dividend-adjusted), price
+  timezone: America/Sao_Paulo
+
+fx:                           # used to convert local prices to base_currency
+  AUD: AUDUSD=X
+  CAD: CADUSD=X
+  BRL: BRL=X                  # this quote is USD/BRL, invert it
+
+companies:
+  - {name: Lynas Rare Earths,            yahoo: LYC.AX,  exchange: ASX,    ccy: AUD, commodity: Rare Earths,      stage: Producer}
+  - {name: Neo Performance Materials,    yahoo: NEO.TO,  exchange: TSX,    ccy: CAD, commodity: Rare Earths,      stage: Producer}
+  - {name: Viridis Mining & Minerals,    yahoo: VMM.AX,  exchange: ASX,    ccy: AUD, commodity: Rare Earths,      stage: Developer}
+  - {name: Meteoric Resources,           yahoo: MEI.AX,  exchange: ASX,    ccy: AUD, commodity: Rare Earths,      stage: Developer}
+  - {name: Brazilian Rare Earths,        yahoo: BRE.AX,  exchange: ASX,    ccy: AUD, commodity: Rare Earths,      stage: Developer}
+  - {name: Aclara Resources,             yahoo: ARA.TO,  exchange: TSX,    ccy: CAD, commodity: Rare Earths,      stage: Developer}
+  - {name: Cameco,                       yahoo: CCJ,     exchange: NYSE,   ccy: USD, commodity: Uranium,          stage: Producer}
+  - {name: NexGen Energy,                yahoo: NXE,     exchange: NYSE,   ccy: USD, commodity: Uranium,          stage: Developer}
+  - {name: Lundin Mining,                yahoo: LUN.TO,  exchange: TSX,    ccy: CAD, commodity: Copper,           stage: Producer}
+  - {name: Hudbay Minerals,              yahoo: HBM,     exchange: NYSE,   ccy: USD, commodity: Copper,           stage: Producer}
+  - {name: Almonty Industries,           yahoo: ALM,     exchange: NASDAQ, ccy: USD, commodity: Tungsten,         stage: Producer}
+  - {name: Carpenter Technology,         yahoo: CRS,     exchange: NYSE,   ccy: USD, commodity: Specialty Alloys, stage: Producer}
+
+commodities:
+  - {name: Copper (COMEX front),  yahoo: HG=F,    unit: USD/lb,  kind: futures}
+  - {name: Gold (COMEX front),    yahoo: GC=F,    unit: USD/oz,  kind: futures}
+  - {name: Silver (COMEX front),  yahoo: SI=F,    unit: USD/oz,  kind: futures}
+  - {name: "Uranium (Sprott Physical U Trust, proxy)", yahoo: U-UN.TO, unit: CAD/unit, kind: proxy}
+  - {name: "Uranium U3O8 (UxC futures, thin)", yahoo: UX=F, unit: USD/lb, kind: futures}
+  - {name: "NdPr oxide (manual, SMM)",  yahoo: null, unit: USD/kg, kind: manual, price: null, as_of: null}

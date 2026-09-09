@@ -1,0 +1,29 @@
+# Coverage Dashboard - notes for future sessions
+
+Streamlit dashboard for a small mining/commodity coverage list, priced from Yahoo Finance.
+The owner is not a developer: keep code commented, keep the README non-technical.
+
+## File roles
+- `universe.yaml`  - THE config. Companies, commodities, FX pairs, settings. All customisation
+                     lives here; adding/removing names or groups must never need a code change.
+- `data.py`        - all Yahoo (yfinance) calls. `fetch_history` (one batch, cached 6 h) and
+                     `fetch_quotes` (one batch, cached `refresh_seconds`). Failures -> NaN + warning
+                     list, never exceptions. Prints "[data] HISTORY DOWNLOAD" when history is fetched.
+- `metrics.py`     - pure pandas: FX conversion, calendar-based returns, sparklines, group/stage
+                     equal-weighted averages. No Streamlit, no network.
+- `app.py`         - UI only. Sidebar (currency, return type, auto-refresh, refresh-now, failed
+                     symbols), commodity cards, per-group tables, summary table, footer.
+- `check_universe.py` - CLI symbol validator (`python check_universe.py`).
+- `.streamlit/config.toml` - dark theme; `layout="wide"` is set in app.py.
+
+## Rules
+- Do not hard-code tickers, group names or stages anywhere in Python.
+- Commodities are never FX-converted; companies are converted before returns are computed.
+- "Refresh now" must clear only `fetch_quotes` (not history).
+- Yahoo rate limits are the main operational risk: keep one history download per 6 h and one
+  quote batch per `refresh_seconds`; never loop one HTTP call per ticker in the app path.
+- Known data gap: UX=F has ~1 row of history on Yahoo, so its returns are n/a by design.
+
+## Environment
+- Developed/tested on Python 3.13, pandas 3.0, yfinance 1.7, streamlit 1.63 (spec: Python 3.11+).
+- `.claude/launch.json` starts the dev server for the in-app browser preview.

@@ -1,0 +1,291 @@
+"""
+app.py - the Streamlit user interface.  Run with:  streamlit run app.py
+
+Everything shown here comes from universe.yaml (what to show) + data.py (Yahoo downloads)
++ metrics.py (return math). This file only arranges things on screen.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+from streamlit_autorefresh import st_autorefresh
+
+import data
+import metrics
+
+# --------------------------------------------------------------------------- #
+# Page setup
+# --------------------------------------------------------------------------- #
+st.set_page_config(page_title="Coverage Dashboard", page_icon="📈", layout="wide",
+                   initial_sidebar_state="expanded")
+
+# Tighten vertical spacing so the whole universe fits on a 1080p screen.
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 0.8rem; padding-bottom: 0.3rem; }
+      h1 { padding-bottom: 0 !important; font-size: 1.8rem !important; }
+      h2, h3 { margin-top: 0.2rem !important; margin-bottom: 0.25rem !important; padding: 0.2rem 0 !important;
+               font-size: 1.15rem !important; }
+      div[data-testid="stVerticalBlock"] { gap: 0.45rem; }
+      div[data-testid="stMarkdownContainer"] p { margin-bottom: 0; }
+      div[data-testid="stMetric"] { padding: 0.1rem 0.4rem; }
+      div[data-testid="stMetricLabel"] p { font-size: 0.78rem; }
+      div[data-testid="stMetricValue"] { font-size: 1.25rem; }
+      .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.75rem;
+               margin-right:6px; font-weight:600; }
+      .open   { background:#1f6f43; color:#e6ffe6; }
+      .closed { background:#5a2d2d; color:#ffe6e6; }
+      .manual { color:#8a8a8a; font-size:0.9rem; }
+      .footer { color:#8a8a8a; font-size:0.78rem; margin-top:0.8rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+CFG = data.load_universe()
+SETTINGS = CFG["settings"]
+TZ = ZoneInfo(SETTINGS["timezone"])
+REFRESH = int(SETTINGS["refresh_seconds"])
+
+ROW_PX = 28          # table row height in pixels (compact so 12+ names fit on one 1080p screen)
+HEADER_PX = 35       # the header row is always this tall regardless of row_height
+CCY_SYMBOL = {"AUD": "A$", "CAD": "C$", "USD": "US$", "BRL": "R$", "GBP": "£", "EUR": "€"}
+RET_LABELS = {"intraday": "Intraday %", "1W": "1W", "1M": "1M", "3M": "3M",
+              "MTD": "MTD", "YTD": "YTD", "1Y": "1Y"}
+
+# Local trading hours (regular session) per exchange. Holidays are not modelled.
+MARKET_HOURS = {
+    "ASX":    ("Australia/Sydney",  dt.time(10, 0), dt.time(16, 0)),
+    "TSX":    ("America/Toronto",   dt.time(9, 30), dt.time(16, 0)),
+    "NYSE":   ("America/New_York",  dt.time(9, 30), dt.time(16, 0)),
+    "NASDAQ": ("America/New_York",  dt.time(9, 30), dt.time(16, 0)),
+}
+
+
+# --------------------------------------------------------------------------- #
+# Sidebar controls
+# --------------------------------------------------------------------------- #
+with st.sidebar:
+    st.header("Settings")
+    ccy_options = ["LOCAL", "USD", "BRL"]
+    default_ccy = SETTINGS["base_currency"] if SETTINGS["base_currency"] in ccy_options else "LOCAL"
+    base_currency = st.radio("Currency", ccy_options, index=ccy_options.index(default_ccy), horizontal=True)
+
+    rt_options = ["Total", "Price"]
+    default_rt = "Total" if SETTINGS["return_type"] == "total" else "Price"
+    return_label = st.radio("Return type", rt_options, index=rt_options.index(default_rt), horizontal=True,
+                            help="Total = dividends reinvested (Adj Close). Price = plain close.")
+    return_type = return_label.lower()
+
+    auto_refresh = st.toggle(f"Auto-refresh every {REFRESH}s", value=True)
+    if st.button("Refresh now", use_container_width=True):
+        data.fetch_quotes.clear()          # only the quote cache - history stays
+        st.rerun()
+    warn_box = st.container()              # filled after data loads
+
+if auto_refresh:
+    # Re-runs the script every REFRESH seconds. Only fetch_quotes expires that often;
+    # fetch_history is cached for 6 h and is NOT re-downloaded by these reruns.
+    st_autorefresh(interval=REFRESH * 1000, key="autorefresh")
+
+
+# --------------------------------------------------------------------------- #
+# Data
+# --------------------------------------------------------------------------- #
+symbols = tuple(data.all_symbols(CFG))
+close, adj, hist_warnings = data.fetch_history(symbols, int(SETTINGS["history_years"]))
+quotes, quote_warnings, fetched_at = data.fetch_quotes(symbols)
+
+table = metrics.compute_table(CFG, close, adj, quotes, base_currency, return_type)
+
+# Symbols that have neither a quote nor history are the "failed" ones.
+failed = sorted({w.split(":")[0] for w in hist_warnings + quote_warnings if ":" in w and not w.startswith("History")})
+with warn_box:
+    if failed or hist_warnings or quote_warnings:
+        st.warning("Symbols with no data (shown as n/a):\n\n" + "\n".join(f"- `{s}`" for s in failed)
+                   if failed else "Data warnings")
+        with st.expander("Details"):
+            for w in hist_warnings + quote_warnings:
+                st.caption(w)
+    else:
+        st.success("All symbols loaded")
+
+
+# --------------------------------------------------------------------------- #
+# Header: title, refresh info, market badges
+# --------------------------------------------------------------------------- #
+def market_badges() -> str:
+    """One green/red pill per exchange in the universe, based on local regular hours."""
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    exchanges = []
+    for c in CFG["companies"]:
+        ex = c.get("exchange", "")
+        if ex and ex not in exchanges:
+            exchanges.append(ex)
+    html = []
+    for ex in exchanges:
+        if ex not in MARKET_HOURS:
+            continue
+        tzname, open_t, close_t = MARKET_HOURS[ex]
+        local = now_utc.astimezone(ZoneInfo(tzname))
+        is_open = local.weekday() < 5 and open_t <= local.time() <= close_t
+        html.append(f'<span class="badge {"open" if is_open else "closed"}">{ex} {"open" if is_open else "closed"}</span>')
+    return "".join(html)
+
+
+last_refresh_local = fetched_at.astimezone(TZ)
+seconds_since = (dt.datetime.now(dt.timezone.utc) - fetched_at).total_seconds()
+seconds_left = max(0, int(REFRESH - seconds_since))
+
+h1, h2 = st.columns([3, 2])
+with h1:
+    st.title("Coverage Dashboard")
+with h2:
+    st.markdown(
+        f"<div style='text-align:right; padding-top:1.2rem'>"
+        f"<b>Last refresh:</b> {last_refresh_local:%Y-%m-%d %H:%M:%S} ({SETTINGS['timezone']}) &nbsp;·&nbsp; "
+        f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s<br/>{market_badges()}</div>",
+        unsafe_allow_html=True,
+    )
+    if auto_refresh:
+        # Tiny countdown that ticks in the browser between reruns (purely cosmetic).
+        components.html(
+            f"""<script>
+            let s = {seconds_left};
+            const el = window.parent.document.getElementById('cd');
+            setInterval(() => {{ s = Math.max(0, s - 1); if (el) el.textContent = s; }}, 1000);
+            </script>""",
+            height=0,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Helpers for formatting tables
+# --------------------------------------------------------------------------- #
+def fmt_price(value: float, ccy: str) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "n/a"
+    sym = CCY_SYMBOL.get(ccy, ccy + " ")
+    decimals = 2 if value >= 1 else 3
+    return f"{sym}{value:,.{decimals}f}"
+
+
+def fmt_pct(value: float) -> str:
+    return "n/a" if value is None or np.isnan(value) else f"{value:+.1%}"
+
+
+def color_returns(val):
+    """Green for positive, red for negative, grey for missing (used with pandas Styler)."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return "color: #8a8a8a"
+    return "color: #3ddc84" if val > 0 else ("color: #ff5c5c" if val < 0 else "")
+
+
+def return_column_config(width: int = 60, fmt: str = "%+.1f%%", spark_width: int = 75) -> dict:
+    """Column settings for the seven return columns + sparkline. Widths are pixels."""
+    cfg = {k: st.column_config.NumberColumn(v, format=fmt, width=width) for k, v in RET_LABELS.items()}
+    cfg["spark"] = st.column_config.LineChartColumn("30d", width=spark_width)
+    return cfg
+
+
+def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> None:
+    """Render a compact st.dataframe with coloured return cells."""
+    view = df[columns].copy()
+    for k in RET_LABELS:
+        if k in view.columns:
+            view[k] = view[k] * 100          # fractions -> percent numbers for the NumberColumn format
+    styler = view.style.map(color_returns, subset=[k for k in RET_LABELS if k in view.columns])
+    height = ROW_PX * len(view) + HEADER_PX + 3   # exact fit, no inner scrollbar
+    st.dataframe(styler, column_config=config, hide_index=True, use_container_width=True,
+                 height=height, row_height=ROW_PX, key=key)
+
+
+# --------------------------------------------------------------------------- #
+# Section 1 - Commodities
+# --------------------------------------------------------------------------- #
+st.subheader("Commodities")
+comm = table[~table["is_company"]].reset_index(drop=True)
+if len(comm):
+    cols = st.columns(len(comm))
+    for col, (_, r) in zip(cols, comm.iterrows()):
+        with col:
+            if r["kind"] == "manual":
+                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} {r['unit']}"
+                as_of = r.get("as_of")
+                as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
+                st.markdown(f"<div class='manual'><b>{r['name']}</b><br/>"
+                            f"<span style='font-size:1.25rem'>{price}</span><br/>manual · as of {as_of}</div>",
+                            unsafe_allow_html=True)
+            else:
+                ytd = fmt_pct(r["YTD"])
+                value = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} {r['unit']}"
+                delta = None if np.isnan(r["intraday"]) else f"{r['intraday']:+.2%}"
+                st.metric(label=f"{r['name']} · YTD {ytd}", value=value, delta=delta)
+
+# --------------------------------------------------------------------------- #
+# Section 2 - Portfolio, one block per commodity group
+# --------------------------------------------------------------------------- #
+# Portfolio on the left (wide), summary on the right so everything fits on one screen.
+left, right = st.columns([2, 1], gap="medium")
+with left:
+    st.subheader("Portfolio")
+companies = table[table["is_company"]].copy()
+
+group_order: list[str] = []                  # order of first appearance in universe.yaml
+for c in CFG["companies"]:
+    g = c.get("commodity", "Other")
+    if g not in group_order:
+        group_order.append(g)
+STAGE_ORDER = ["Producer", "Developer"]      # anything else goes after these
+
+companies["price_str"] = [fmt_price(v, c) for v, c in zip(companies["last"], companies["display_ccy"])]
+companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
+companies["file_order"] = range(len(companies))
+
+TABLE_COLS = ["name", "ticker", "exchange", "stage", "price_str"] + list(RET_LABELS) + ["spark"]
+company_config = {
+    "name": st.column_config.TextColumn("Name", width=160),
+    "ticker": st.column_config.TextColumn("Ticker", width=64),
+    "exchange": st.column_config.TextColumn("Exchange", width=72),
+    "stage": st.column_config.TextColumn("Stage", width=78),
+    "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
+                                             width=95),
+    **return_column_config(width=60, spark_width=70),
+}
+
+with left:
+    for g in group_order:
+        block = companies[companies["commodity"] == g].sort_values(["stage_rank", "file_order"])
+        if block.empty:
+            continue
+        st.markdown(f"**{g}**")
+        show_table(block, TABLE_COLS, company_config, key=f"tbl_{g}")
+
+# --------------------------------------------------------------------------- #
+# Section 3 - Summary by group and by stage
+# --------------------------------------------------------------------------- #
+with right:
+    st.subheader("Summary (equal-weighted averages)")
+    summary = metrics.summary_table(table, group_order, STAGE_ORDER)
+    summary["group"] = summary["group"] + " (" + summary["n"].astype(str) + ")"   # e.g. "Copper (2)"
+    summary_config = {
+        "group": st.column_config.TextColumn("Group (# names)", width=135),
+        **return_column_config(width=46, fmt="%+.0f%%", spark_width=60),
+    }
+    show_table(summary, ["group"] + list(RET_LABELS) + ["spark"], summary_config, key="tbl_summary")
+
+# --------------------------------------------------------------------------- #
+# Footer
+# --------------------------------------------------------------------------- #
+st.markdown(
+    "<div class='footer'>Source: Yahoo Finance. ASX/TSX quotes delayed 15–20 min; NYSE/NASDAQ near real-time. "
+    "Futures are front-month continuous contracts.</div>",
+    unsafe_allow_html=True,
+)
