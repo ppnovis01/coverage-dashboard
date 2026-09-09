@@ -18,6 +18,10 @@ streamlit run app.py
 
 A browser tab opens at http://localhost:8501. Leave the terminal window open while you use it.
 
+The side panel with the currency / return-type switches is closed by default to save space.
+Open it with the small arrow at the top-left. "Fit to one screen" (on by default) scales the
+page so the whole dashboard fits your window height without scrolling.
+
 The first load downloads two years of history (a few seconds). After that, prices refresh
 every 60 seconds automatically; history is refreshed only every 6 hours.
 

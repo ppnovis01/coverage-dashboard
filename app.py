@@ -23,7 +23,7 @@ import metrics
 # Page setup
 # --------------------------------------------------------------------------- #
 st.set_page_config(page_title="Coverage Dashboard", page_icon="📈", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="collapsed")   # open it with the arrow at the top-left
 
 # Tighten vertical spacing so the whole universe fits on a 1080p screen.
 st.markdown(
@@ -42,8 +42,15 @@ st.markdown(
                margin-right:6px; font-weight:600; }
       .open   { background:#1f6f43; color:#e6ffe6; }
       .closed { background:#5a2d2d; color:#ffe6e6; }
-      .manual { color:#8a8a8a; font-size:0.9rem; }
+      .grp { font-weight:700; font-size:0.85rem; color:#cfcfcf; margin:0.15rem 0 0.05rem 0; }
+      .card { border:1px solid #333; border-radius:8px; padding:0.35rem 0.55rem; line-height:1.25; }
+      .card .nm { font-size:0.74rem; color:#b0b0b0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .card .px { font-size:1.15rem; font-weight:600; }
+      .card .sub { font-size:0.74rem; }
+      .up { color:#3ddc84; } .dn { color:#ff5c5c; } .na { color:#8a8a8a; }
+      .manual { color:#8a8a8a; }
       .footer { color:#8a8a8a; font-size:0.78rem; margin-top:0.8rem; }
+      .hint { display:block; color:#f0c674; font-size:0.78rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -54,7 +61,10 @@ SETTINGS = CFG["settings"]
 TZ = ZoneInfo(SETTINGS["timezone"])
 REFRESH = int(SETTINGS["refresh_seconds"])
 
-ROW_PX = 28          # table row height in pixels (compact so 12+ names fit on one 1080p screen)
+# Main area must be at least this wide (CSS px) for every table column to show without
+# a horizontal scrollbar; the fit-to-screen script never zooms in beyond this.
+MIN_MAIN_WIDTH = 1700
+ROW_PX = 26          # table row height in pixels (compact so 12+ names fit on one screen)
 HEADER_PX = 35       # the header row is always this tall regardless of row_height
 CCY_SYMBOL = {"AUD": "A$", "CAD": "C$", "USD": "US$", "BRL": "R$", "GBP": "£", "EUR": "€"}
 RET_LABELS = {"intraday": "Intraday %", "1W": "1W", "1M": "1M", "3M": "3M",
@@ -85,6 +95,8 @@ with st.sidebar:
     return_type = return_label.lower()
 
     auto_refresh = st.toggle(f"Auto-refresh every {REFRESH}s", value=True)
+    fit_screen = st.toggle("Fit to one screen", value=True,
+                           help="Scales the main area so everything fits your window height without scrolling.")
     if st.button("Refresh now", use_container_width=True):
         data.fetch_quotes.clear()          # only the quote cache - history stays
         st.rerun()
@@ -151,7 +163,9 @@ with h2:
     st.markdown(
         f"<div style='text-align:right; padding-top:1.2rem'>"
         f"<b>Last refresh:</b> {last_refresh_local:%Y-%m-%d %H:%M:%S} ({SETTINGS['timezone']}) &nbsp;·&nbsp; "
-        f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s<br/>{market_badges()}</div>",
+        f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s<br/>{market_badges()}"
+        + (f"<span class='badge closed'>no data: {', '.join(failed)}</span>" if failed else "")
+        + "<span id='fit-hint' class='hint'></span></div>",
         unsafe_allow_html=True,
     )
     if auto_refresh:
@@ -178,7 +192,7 @@ def fmt_price(value: float, ccy: str) -> str:
 
 
 def fmt_pct(value: float) -> str:
-    return "n/a" if value is None or np.isnan(value) else f"{value:+.1%}"
+    return "n/a" if value is None or np.isnan(value) else f"{value:+.2%}"
 
 
 def color_returns(val):
@@ -188,11 +202,20 @@ def color_returns(val):
     return "color: #3ddc84" if val > 0 else ("color: #ff5c5c" if val < 0 else "")
 
 
-def return_column_config(width: int = 60, fmt: str = "%+.1f%%", spark_width: int = 75) -> dict:
+def return_column_config(width: int = 64, fmt: str = "%+.2f%%", spark_width: int = 75) -> dict:
     """Column settings for the seven return columns + sparkline. Widths are pixels."""
     cfg = {k: st.column_config.NumberColumn(v, format=fmt, width=width) for k, v in RET_LABELS.items()}
     cfg["spark"] = st.column_config.LineChartColumn("30d", width=spark_width)
     return cfg
+
+
+def table_width(config: dict, columns: list[str]) -> int:
+    """Sum of the configured pixel column widths, plus a little slack for borders."""
+    total = 0
+    for c in columns:
+        w = (config.get(c) or {}).get("width")      # column_config objects are plain dicts
+        total += int(w) if isinstance(w, (int, float)) else 90
+    return total + 12
 
 
 def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> None:
@@ -203,7 +226,9 @@ def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> 
             view[k] = view[k] * 100          # fractions -> percent numbers for the NumberColumn format
     styler = view.style.map(color_returns, subset=[k for k in RET_LABELS if k in view.columns])
     height = ROW_PX * len(view) + HEADER_PX + 3   # exact fit, no inner scrollbar
-    st.dataframe(styler, column_config=config, hide_index=True, use_container_width=True,
+    # A fixed pixel width (not "stretch") keeps the grid correctly sized when the
+    # fit-to-screen script scales the page.
+    st.dataframe(styler, column_config=config, hide_index=True, width=table_width(config, columns),
                  height=height, row_height=ROW_PX, key=key)
 
 
@@ -212,28 +237,39 @@ def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> 
 # --------------------------------------------------------------------------- #
 st.subheader("Commodities")
 comm = table[~table["is_company"]].reset_index(drop=True)
+
+
+def pct_span(value: float, label: str = "") -> str:
+    """Small coloured percentage for the commodity cards."""
+    if value is None or np.isnan(value):
+        return f"<span class='na'>{label} n/a</span>"
+    cls = "up" if value > 0 else ("dn" if value < 0 else "")
+    return f"<span class='{cls}'>{label} {value:+.2%}</span>"
+
+
 if len(comm):
     cols = st.columns(len(comm))
     for col, (_, r) in zip(cols, comm.iterrows()):
         with col:
             if r["kind"] == "manual":
-                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} {r['unit']}"
+                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} <small>{r['unit']}</small>"
                 as_of = r.get("as_of")
                 as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
-                st.markdown(f"<div class='manual'><b>{r['name']}</b><br/>"
-                            f"<span style='font-size:1.25rem'>{price}</span><br/>manual · as of {as_of}</div>",
+                st.markdown(f"<div class='card manual'><div class='nm' title='{r['name']}'>{r['name']}</div>"
+                            f"<div class='px'>{price}</div><div class='sub'>manual · as of {as_of}</div></div>",
                             unsafe_allow_html=True)
             else:
-                ytd = fmt_pct(r["YTD"])
-                value = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} {r['unit']}"
-                delta = None if np.isnan(r["intraday"]) else f"{r['intraday']:+.2%}"
-                st.metric(label=f"{r['name']} · YTD {ytd}", value=value, delta=delta)
+                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} <small>{r['unit']}</small>"
+                st.markdown(f"<div class='card'><div class='nm' title='{r['name']}'>{r['name']}</div>"
+                            f"<div class='px'>{price}</div>"
+                            f"<div class='sub'>{pct_span(r['intraday'])} &nbsp;·&nbsp; {pct_span(r['YTD'], 'YTD')}</div></div>",
+                            unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
 # Section 2 - Portfolio, one block per commodity group
 # --------------------------------------------------------------------------- #
 # Portfolio on the left (wide), summary on the right so everything fits on one screen.
-left, right = st.columns([2, 1], gap="medium")
+left, right = st.columns([3, 2], gap="medium")
 with left:
     st.subheader("Portfolio")
 companies = table[table["is_company"]].copy()
@@ -251,13 +287,13 @@ companies["file_order"] = range(len(companies))
 
 TABLE_COLS = ["name", "ticker", "exchange", "stage", "price_str"] + list(RET_LABELS) + ["spark"]
 company_config = {
-    "name": st.column_config.TextColumn("Name", width=160),
+    "name": st.column_config.TextColumn("Name", width=165),
     "ticker": st.column_config.TextColumn("Ticker", width=64),
     "exchange": st.column_config.TextColumn("Exchange", width=72),
     "stage": st.column_config.TextColumn("Stage", width=78),
     "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
                                              width=95),
-    **return_column_config(width=60, spark_width=70),
+    **return_column_config(width=64, spark_width=70),
 }
 
 with left:
@@ -265,8 +301,10 @@ with left:
         block = companies[companies["commodity"] == g].sort_values(["stage_rank", "file_order"])
         if block.empty:
             continue
-        st.markdown(f"**{g}**")
-        show_table(block, TABLE_COLS, company_config, key=f"tbl_{g}")
+        # The group name is shown as the header of the first column instead of a separate
+        # title line - it keeps the whole universe on one screen.
+        cfg_g = {**company_config, "name": st.column_config.TextColumn(g, width=165)}
+        show_table(block, TABLE_COLS, cfg_g, key=f"tbl_{g}")
 
 # --------------------------------------------------------------------------- #
 # Section 3 - Summary by group and by stage
@@ -277,7 +315,7 @@ with right:
     summary["group"] = summary["group"] + " (" + summary["n"].astype(str) + ")"   # e.g. "Copper (2)"
     summary_config = {
         "group": st.column_config.TextColumn("Group (# names)", width=135),
-        **return_column_config(width=46, fmt="%+.0f%%", spark_width=60),
+        **return_column_config(width=62, spark_width=60),
     }
     show_table(summary, ["group"] + list(RET_LABELS) + ["spark"], summary_config, key="tbl_summary")
 
@@ -289,3 +327,51 @@ st.markdown(
     "Futures are front-month continuous contracts.</div>",
     unsafe_allow_html=True,
 )
+
+# --------------------------------------------------------------------------- #
+# Fit to one screen: scale the main area so its full height matches the window
+# --------------------------------------------------------------------------- #
+# Uses a CSS transform (not `zoom`): a transform scales only what you see, so Streamlit's
+# own size measurements for the tables stay correct.
+if fit_screen:
+    components.html(
+        f"""<script>
+        const doc = window.parent.document;
+        const MIN_WIDTH = {MIN_MAIN_WIDTH};
+        function fit() {{
+            const main = doc.querySelector('.block-container');
+            if (!main) return;
+            // 1. reset and measure the natural size
+            main.style.transform = ''; main.style.width = ''; main.style.marginBottom = '';
+            main.style.maxWidth = 'none'; main.style.marginLeft = '0'; main.style.marginRight = '0';
+            main.style.alignSelf = 'flex-start';
+            const rect = main.getBoundingClientRect();
+            const availH = window.parent.innerHeight - rect.top - 6;
+            const zW = rect.width / MIN_WIDTH;                     // keep tables wide enough for all columns
+            let z = Math.min(availH / main.scrollHeight, zW);
+            const hint = doc.getElementById('fit-hint');
+            if (z < 0.98) {{
+                // Shrinking with CSS breaks Streamlit's table sizing, so ask for browser zoom instead
+                // (Ctrl and minus). Browser zoom is remembered per site, so this is a one-time step.
+                const pct = Math.max(50, Math.round(z * 100 / 5) * 5);
+                if (hint) hint.textContent = 'Tip: set browser zoom to about ' + pct + '% (Ctrl and −) to fit everything on one screen';
+                return;
+            }}
+            if (hint) hint.textContent = '';
+            z = Math.min(1.3, z);
+            // lay out at the compensated width, re-measure height, refine once
+            main.style.width = (rect.width / z).toFixed(0) + 'px';
+            z = Math.min(1.3, Math.max(1, Math.min(availH / main.scrollHeight, zW)));
+            main.style.width = (rect.width / z).toFixed(0) + 'px';
+            const natural = main.scrollHeight;
+            // scale visually and give back the layout space the scaling takes
+            main.style.transformOrigin = 'top left';
+            main.style.transform = 'scale(' + z.toFixed(3) + ')';
+            main.style.marginBottom = (natural * (z - 1)).toFixed(0) + 'px';
+        }}
+        setTimeout(fit, 250); setTimeout(fit, 1200); setTimeout(fit, 3000);
+        let t = null;
+        window.parent.addEventListener('resize', () => {{ clearTimeout(t); t = setTimeout(fit, 150); }});
+        </script>""",
+        height=0,
+    )
