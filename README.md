@@ -104,7 +104,16 @@ settings:
 Settings changes need a restart of the app. Currency and return type can also be switched
 live in the sidebar.
 
-## 4. What the numbers mean
+## 4. The Graph view
+
+Click **Graph** under the title. Pick one or more assets (companies and commodities), choose a
+timeframe (1W to 2Y, YTD, or Custom with your own dates), and the chart updates. With a single
+asset you see its price; with two or more, every line is rebased to 100 at the start of the
+timeframe so you can compare performance. The lines use the currency and return type selected
+in the side panel. Auto-refresh pauses while you are on the Graph view so the chart does not
+reset while you are zooming; click **Overview** to go back to the live tables.
+
+## 5. What the numbers mean
 
 * **Price** – latest Yahoo price in the stock's own currency, or converted to USD/BRL when
   selected in the sidebar. Commodities are always in their own unit.
@@ -125,7 +134,7 @@ live in the sidebar.
 Some thinly traded futures (for example UX=F) have very little history on Yahoo, so their
 returns show `n/a` even though the price is fine.
 
-## 5. Deploy to Streamlit Community Cloud (free)
+## 6. Deploy to Streamlit Community Cloud (free)
 
 1. Put this folder in a GitHub repository (all files, including `.streamlit/config.toml`).
 2. Go to https://share.streamlit.io, sign in with GitHub, click **New app**.
@@ -135,7 +144,7 @@ returns show `n/a` even though the price is fine.
 Note: Yahoo Finance sometimes rate-limits cloud servers. If the app shows many `n/a`
 values after a deploy, wait a few minutes and press **Refresh now** in the sidebar.
 
-## 6. Files
+## 7. Files
 
 | File | Role |
 |------|------|

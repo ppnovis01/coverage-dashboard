@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from streamlit_autorefresh import st_autorefresh
 
@@ -99,11 +100,6 @@ with st.sidebar:
         st.rerun()
     warn_box = st.container()              # filled after data loads
 
-if auto_refresh:
-    # Re-runs the script every REFRESH seconds. Only fetch_quotes expires that often;
-    # fetch_history is cached for 6 h and is NOT re-downloaded by these reruns.
-    st_autorefresh(interval=REFRESH * 1000, key="autorefresh")
-
 
 # --------------------------------------------------------------------------- #
 # Data
@@ -158,16 +154,21 @@ seconds_left = max(0, int(REFRESH - seconds_since))
 h1, h2 = st.columns([3, 2])
 with h1:
     st.title("Coverage Dashboard")
+    # Which "tab" is showing. A segmented control (not st.tabs) is used because it remembers
+    # the choice across the automatic reruns - st.tabs would jump back to Overview every minute.
+    view = st.segmented_control("View", ["Overview", "Graph"], default="Overview", key="view",
+                                label_visibility="collapsed") or "Overview"
 with h2:
     st.markdown(
         f"<div style='text-align:right; padding-top:1.2rem'>"
         f"<b>Last refresh:</b> {last_refresh_local:%Y-%m-%d %H:%M:%S} ({SETTINGS['timezone']}) &nbsp;·&nbsp; "
-        f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s<br/>{market_badges()}"
+        + (f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s" if view == "Overview"
+           else "<b>auto-refresh paused on Graph</b>") + f"<br/>{market_badges()}"
         + (f"<span class='badge closed'>no data: {', '.join(failed)}</span>" if failed else "")
         + "<span id='fit-hint' class='hint'></span></div>",
         unsafe_allow_html=True,
     )
-    if auto_refresh:
+    if auto_refresh and view == "Overview":
         # Tiny countdown that ticks in the browser between reruns (purely cosmetic).
         components.html(
             f"""<script>
@@ -177,6 +178,12 @@ with h2:
             </script>""",
             height=0,
         )
+
+
+if auto_refresh and view == "Overview":
+    # Re-runs the script every REFRESH seconds. Only fetch_quotes expires that often; history
+    # is cached 6 h. Paused on the Graph view so chart zooming is not reset under your hands.
+    st_autorefresh(interval=REFRESH * 1000, key="autorefresh")
 
 
 # --------------------------------------------------------------------------- #
@@ -254,118 +261,205 @@ def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> 
 # --------------------------------------------------------------------------- #
 # Section 1 - Commodities
 # --------------------------------------------------------------------------- #
-st.subheader("Commodities")
-comm = table[~table["is_company"]].reset_index(drop=True)
+if view == "Overview":
+    st.subheader("Commodities")
+    comm = table[~table["is_company"]].reset_index(drop=True)
 
 
-def fmt_comm_price(r) -> str:
-    return "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f}"
+    def fmt_comm_price(r) -> str:
+        return "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f}"
 
 
-def fmt_comm_time(r) -> str:
-    if r["kind"] == "manual":
-        as_of = r.get("as_of")
-        as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
-        return f"as of {as_of}"
-    return fmt_time(r["last_time"], r["last_date"])
+    def fmt_comm_time(r) -> str:
+        if r["kind"] == "manual":
+            as_of = r.get("as_of")
+            as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
+            return f"as of {as_of}"
+        return fmt_time(r["last_time"], r["last_date"])
 
 
-if len(comm):
-    comm["price_str"] = [fmt_comm_price(r) for _, r in comm.iterrows()]
-    comm["time_str"] = [fmt_comm_time(r) for _, r in comm.iterrows()]
-    comm["kind_str"] = comm["kind"].str.capitalize()
-    COMM_COLS = ["name", "kind_str", "unit", "price_str", "time_str"] + list(RET_LABELS) + ["spark"]
-    comm_config = {
-        "name": st.column_config.TextColumn("Commodity", width=230),
-        "kind_str": st.column_config.TextColumn("Kind", width=64,
-                                                help="Futures = front-month contract; Proxy = listed fund/trust; "
-                                                     "Manual = typed into universe.yaml"),
-        "unit": st.column_config.TextColumn("Unit", width=72),
-        "price_str": st.column_config.TextColumn("Price", width=86),
-        "time_str": st.column_config.TextColumn("Time", width=92),
+    if len(comm):
+        comm["price_str"] = [fmt_comm_price(r) for _, r in comm.iterrows()]
+        comm["time_str"] = [fmt_comm_time(r) for _, r in comm.iterrows()]
+        comm["kind_str"] = comm["kind"].str.capitalize()
+        COMM_COLS = ["name", "kind_str", "unit", "price_str", "time_str"] + list(RET_LABELS) + ["spark"]
+        comm_config = {
+            "name": st.column_config.TextColumn("Commodity", width=230),
+            "kind_str": st.column_config.TextColumn("Kind", width=64,
+                                                    help="Futures = front-month contract; Proxy = listed fund/trust; "
+                                                         "Manual = typed into universe.yaml"),
+            "unit": st.column_config.TextColumn("Unit", width=72),
+            "price_str": st.column_config.TextColumn("Price", width=86),
+            "time_str": st.column_config.TextColumn("Time", width=92),
+            **return_column_config(width=64, spark_width=70),
+        }
+        show_table(comm, COMM_COLS, comm_config, key="tbl_commodities")
+
+    # --------------------------------------------------------------------------- #
+    # Section 2 - Portfolio, one block per commodity group
+    # --------------------------------------------------------------------------- #
+    # Portfolio on the left (wide), summary on the right so everything fits on one screen.
+    left, right = st.columns([3, 2], gap="medium")
+    with left:
+        st.subheader("Portfolio")
+    companies = table[table["is_company"]].copy()
+
+    group_order: list[str] = []                  # order of first appearance in universe.yaml
+    for c in CFG["companies"]:
+        g = c.get("commodity", "Other")
+        if g not in group_order:
+            group_order.append(g)
+    STAGE_ORDER = ["Producer", "Developer"]      # anything else goes after these
+
+    companies["price_str"] = [fmt_price(v, c) for v, c in zip(companies["last"], companies["display_ccy"])]
+    companies["time_str"] = [fmt_time(t, d) for t, d in zip(companies["last_time"], companies["last_date"])]
+    companies["mcap_str"] = [fmt_mcap(v) for v in companies["mcap_usd"]]
+    companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
+    companies["file_order"] = range(len(companies))
+
+    # Ticker and Exchange are hidden unless the sidebar switch is on.
+    MIN_MAIN_WIDTH = MIN_MAIN_WIDTH_BASE + 72 - (0 if show_ids else 64 + 72)
+    id_cols = ["ticker", "exchange"] if show_ids else []
+    TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "mcap_str", "time_str"] + list(RET_LABELS) + ["spark"]
+    company_config = {
+        "name": st.column_config.TextColumn("Name", width=165),
+        "ticker": st.column_config.TextColumn("Ticker", width=64),
+        "exchange": st.column_config.TextColumn("Exchange", width=72),
+        "stage": st.column_config.TextColumn("Stage", width=78),
+        "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
+                                                 width=95),
+        "mcap_str": st.column_config.TextColumn("Mkt cap", width=86,
+                                                help="Market cap in US dollars: shares outstanding x live price x FX."),
+        "time_str": st.column_config.TextColumn("Time", width=72,
+                                                help=f"Time of the last price ({SETTINGS['timezone']}). "
+                                                     "ASX/TSX prices are delayed 15-20 min."),
         **return_column_config(width=64, spark_width=70),
     }
-    show_table(comm, COMM_COLS, comm_config, key="tbl_commodities")
 
-# --------------------------------------------------------------------------- #
-# Section 2 - Portfolio, one block per commodity group
-# --------------------------------------------------------------------------- #
-# Portfolio on the left (wide), summary on the right so everything fits on one screen.
-left, right = st.columns([3, 2], gap="medium")
-with left:
-    st.subheader("Portfolio")
-companies = table[table["is_company"]].copy()
+    with left:
+        for g in group_order:
+            block = companies[companies["commodity"] == g].sort_values(["stage_rank", "file_order"])
+            if block.empty:
+                continue
+            # The group name is shown as the header of the first column instead of a separate
+            # title line - it keeps the whole universe on one screen.
+            cfg_g = {**company_config, "name": st.column_config.TextColumn(g, width=165)}
+            show_table(block, TABLE_COLS, cfg_g, key=f"tbl_{g}")
 
-group_order: list[str] = []                  # order of first appearance in universe.yaml
-for c in CFG["companies"]:
-    g = c.get("commodity", "Other")
-    if g not in group_order:
-        group_order.append(g)
-STAGE_ORDER = ["Producer", "Developer"]      # anything else goes after these
+    # --------------------------------------------------------------------------- #
+    # Section 3 - Summary by group and by stage
+    # --------------------------------------------------------------------------- #
+    with right:
+        st.subheader("Summary (equal-weighted averages)")
+        summary = metrics.summary_table(table, group_order, STAGE_ORDER)
+        summary["group"] = summary["group"] + " (" + summary["n"].astype(str) + ")"   # e.g. "Copper (2)"
+        summary_config = {
+            "group": st.column_config.TextColumn("Group (# names)", width=135),
+            **return_column_config(width=62, spark_width=60),
+        }
+        show_table(summary, ["group"] + list(RET_LABELS) + ["spark"], summary_config, key="tbl_summary")
 
-companies["price_str"] = [fmt_price(v, c) for v, c in zip(companies["last"], companies["display_ccy"])]
-companies["time_str"] = [fmt_time(t, d) for t, d in zip(companies["last_time"], companies["last_date"])]
-companies["mcap_str"] = [fmt_mcap(v) for v in companies["mcap_usd"]]
-companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
-companies["file_order"] = range(len(companies))
+    # --------------------------------------------------------------------------- #
+    # Footer
+    # --------------------------------------------------------------------------- #
+    st.markdown(
+        "<div class='footer'>Source: Yahoo Finance. ASX/TSX quotes delayed 15–20 min; NYSE/NASDAQ near real-time. "
+        "Futures are front-month continuous contracts.</div>",
+        unsafe_allow_html=True,
+    )
 
-# Ticker and Exchange are hidden unless the sidebar switch is on.
-MIN_MAIN_WIDTH = MIN_MAIN_WIDTH_BASE + 72 - (0 if show_ids else 64 + 72)
-id_cols = ["ticker", "exchange"] if show_ids else []
-TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "mcap_str", "time_str"] + list(RET_LABELS) + ["spark"]
-company_config = {
-    "name": st.column_config.TextColumn("Name", width=165),
-    "ticker": st.column_config.TextColumn("Ticker", width=64),
-    "exchange": st.column_config.TextColumn("Exchange", width=72),
-    "stage": st.column_config.TextColumn("Stage", width=78),
-    "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
-                                             width=95),
-    "mcap_str": st.column_config.TextColumn("Mkt cap", width=86,
-                                            help="Market cap in US dollars: shares outstanding x live price x FX."),
-    "time_str": st.column_config.TextColumn("Time", width=72,
-                                            help=f"Time of the last price ({SETTINGS['timezone']}). "
-                                                 "ASX/TSX prices are delayed 15-20 min."),
-    **return_column_config(width=64, spark_width=70),
-}
 
-with left:
-    for g in group_order:
-        block = companies[companies["commodity"] == g].sort_values(["stage_rank", "file_order"])
-        if block.empty:
+# =========================================================================== #
+# GRAPH VIEW - pick assets and a timeframe; 2+ assets are rebased to 100
+# =========================================================================== #
+else:
+    hist_src = adj if return_type == "total" else close
+
+    # Everything with a Yahoo symbol can be charted: companies + non-manual commodities.
+    chart_items: dict[str, dict] = {}
+    for c in CFG["companies"]:
+        chart_items[f"{c['name']} ({c['yahoo']})"] = {"symbol": c["yahoo"], "ccy": c["ccy"],
+                                                     "unit": c["ccy"], "company": True}
+    for c in CFG["commodities"]:
+        if c.get("yahoo") and c.get("kind") != "manual":
+            chart_items[f"{c['name']} ({c['yahoo']})"] = {"symbol": c["yahoo"], "ccy": "",
+                                                         "unit": c.get("unit", ""), "company": False}
+
+    g1, g2, g3 = st.columns([5, 4, 2])
+    with g1:
+        chosen = st.multiselect("Assets", list(chart_items), default=[list(chart_items)[0]], key="graph_assets",
+                                placeholder="Pick one or more assets")
+    with g2:
+        TIMEFRAMES = ["1W", "1M", "3M", "6M", "YTD", "1Y", f"{SETTINGS['history_years']}Y", "Custom"]
+        timeframe = st.segmented_control("Timeframe", TIMEFRAMES, default="1Y", key="graph_tf") or "1Y"
+    with g3:
+        multi = len(chosen) > 1
+        # Comparing several assets always rebases (their prices are in different units);
+        # for a single asset it is a choice.
+        rebase = st.toggle("Rebase to 100", value=multi, disabled=multi,
+                           help="Every line starts at 100 at the beginning of the timeframe, so "
+                                "different assets can be compared. Always on when comparing 2+ assets.")
+        rebase = rebase or multi
+
+    today = pd.Timestamp(dt.datetime.now(TZ).date())
+    if timeframe == "Custom":
+        c1, c2 = st.columns(2)
+        start_date = pd.Timestamp(c1.date_input("From", value=(today - pd.DateOffset(years=1)).date(),
+                                                key="graph_from"))
+        end_date = pd.Timestamp(c2.date_input("To", value=today.date(), key="graph_to"))
+    else:
+        end_date = today
+        offsets = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1), "3M": pd.DateOffset(months=3),
+                   "6M": pd.DateOffset(months=6), "1Y": pd.DateOffset(years=1)}
+        if timeframe == "YTD":
+            start_date = pd.Timestamp(year=today.year, month=1, day=1)
+        elif timeframe in offsets:
+            start_date = today - offsets[timeframe]
+        else:                                             # "2Y" (history_years) = everything we have
+            start_date = today - pd.DateOffset(years=int(SETTINGS["history_years"]))
+
+    fig = go.Figure()
+    units = set()
+    for label in chosen:
+        item = chart_items[label]
+        sym = item["symbol"]
+        ser = hist_src[sym] if sym in hist_src.columns else pd.Series(dtype="float64")
+        q = quotes.loc[sym] if sym in quotes.index else None
+        if q is not None:                                 # include today's live price
+            ser = metrics.splice_live_price(ser, float(q["last"]), q["last_date"])
+        if item["company"] and base_currency != "LOCAL":
+            ser = metrics.convert_series(ser, item["ccy"], base_currency, CFG["fx"], close)
+            units.add(base_currency)
+        else:
+            units.add(item["unit"])
+        ser = ser.dropna()
+        ser = ser[(ser.index >= start_date) & (ser.index <= end_date)]
+        if ser.empty:
+            st.caption(f"No data for {label} in this timeframe.")
             continue
-        # The group name is shown as the header of the first column instead of a separate
-        # title line - it keeps the whole universe on one screen.
-        cfg_g = {**company_config, "name": st.column_config.TextColumn(g, width=165)}
-        show_table(block, TABLE_COLS, cfg_g, key=f"tbl_{g}")
+        if rebase:
+            ser = ser / ser.iloc[0] * 100
+        fig.add_trace(go.Scatter(x=ser.index, y=ser.values, mode="lines", name=label,
+                                 hovertemplate="%{y:,.2f}<extra>" + label + "</extra>"))
 
-# --------------------------------------------------------------------------- #
-# Section 3 - Summary by group and by stage
-# --------------------------------------------------------------------------- #
-with right:
-    st.subheader("Summary (equal-weighted averages)")
-    summary = metrics.summary_table(table, group_order, STAGE_ORDER)
-    summary["group"] = summary["group"] + " (" + summary["n"].astype(str) + ")"   # e.g. "Copper (2)"
-    summary_config = {
-        "group": st.column_config.TextColumn("Group (# names)", width=135),
-        **return_column_config(width=62, spark_width=60),
-    }
-    show_table(summary, ["group"] + list(RET_LABELS) + ["spark"], summary_config, key="tbl_summary")
-
-# --------------------------------------------------------------------------- #
-# Footer
-# --------------------------------------------------------------------------- #
-st.markdown(
-    "<div class='footer'>Source: Yahoo Finance. ASX/TSX quotes delayed 15–20 min; NYSE/NASDAQ near real-time. "
-    "Futures are front-month continuous contracts.</div>",
-    unsafe_allow_html=True,
-)
+    y_title = "Rebased (start = 100)" if rebase else " / ".join(sorted(units)) or "Price"
+    fig.update_layout(template="plotly_dark", height=620, margin=dict(l=10, r=10, t=30, b=10),
+                      hovermode="x unified", legend=dict(orientation="h", y=1.05, x=0),
+                      yaxis_title=y_title, xaxis_title=None,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    if rebase:
+        fig.add_hline(y=100, line_dash="dot", line_color="#666")
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+    st.caption(f"{'Total return (dividends reinvested)' if return_type == 'total' else 'Price return'}"
+               f" · companies in {'local currency' if base_currency == 'LOCAL' else base_currency}"
+               f" · commodities in their own unit · daily closes plus today's live price")
 
 # --------------------------------------------------------------------------- #
 # Fit to one screen: scale the main area so its full height matches the window
 # --------------------------------------------------------------------------- #
 # Uses a CSS transform (not `zoom`): a transform scales only what you see, so Streamlit's
 # own size measurements for the tables stay correct.
-if fit_screen:
+if fit_screen and view == "Overview":
     components.html(
         f"""<script>
         const doc = window.parent.document;
@@ -404,6 +498,15 @@ if fit_screen:
         setTimeout(fit, 250); setTimeout(fit, 1200); setTimeout(fit, 3000);
         let t = null;
         window.parent.addEventListener('resize', () => {{ clearTimeout(t); t = setTimeout(fit, 150); }});
+        </script>""",
+        height=0,
+    )
+else:
+    # No scaling on the Graph view (Plotly sizes itself to the window) - undo any leftover transform.
+    components.html(
+        """<script>
+        const m = window.parent.document.querySelector('.block-container');
+        if (m) { m.style.transform = ''; m.style.width = ''; m.style.marginBottom = ''; }
         </script>""",
         height=0,
     )

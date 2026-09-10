@@ -13,7 +13,9 @@ The owner is not a developer: keep code commented, keep the README non-technical
                      list, never exceptions. Prints "[data] HISTORY DOWNLOAD" when history is fetched.
 - `metrics.py`     - pure pandas: FX conversion, calendar-based returns, sparklines, group/stage
                      equal-weighted averages. No Streamlit, no network.
-- `app.py`         - UI only. Sidebar (currency, return type, auto-refresh, refresh-now, failed
+- `app.py`         - UI only. Two views switched by a segmented control (`view`): Overview (tables) and
+                     Graph (Plotly, multi-asset, rebased to 100). st.tabs is avoided on purpose: it resets
+                     to the first tab on every auto-refresh rerun. Auto-refresh is paused on Graph. Sidebar (currency, return type, auto-refresh, refresh-now, failed
                      symbols), commodity cards, per-group tables, summary table, footer.
 - `check_universe.py` - CLI symbol validator (`python check_universe.py`).
 - `.streamlit/config.toml` - dark theme; `layout="wide"` is set in app.py.
