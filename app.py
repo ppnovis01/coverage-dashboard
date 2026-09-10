@@ -30,7 +30,7 @@ st.set_page_config(page_title="Coverage Dashboard", page_icon="📈", layout="wi
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 0.8rem; padding-bottom: 0.3rem; }
+      .block-container { padding-top: 3.3rem; padding-bottom: 0.3rem; }   /* clears the 60px top bar */
       h1 { padding-bottom: 0 !important; font-size: 1.8rem !important; }
       h2, h3 { margin-top: 0.2rem !important; margin-bottom: 0.25rem !important; padding: 0.2rem 0 !important;
                font-size: 1.15rem !important; }
