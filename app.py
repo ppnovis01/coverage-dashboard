@@ -63,7 +63,7 @@ REFRESH = int(SETTINGS["refresh_seconds"])
 
 # Main area must be at least this wide (CSS px) for every table column to show without
 # a horizontal scrollbar; the fit-to-screen script never zooms in beyond this.
-MIN_MAIN_WIDTH_BASE = 1700
+MIN_MAIN_WIDTH_BASE = 1700 + 86      # +86 for the market cap column
 ROW_PX = 26          # table row height in pixels (compact so 12+ names fit on one screen)
 HEADER_PX = 35       # the header row is always this tall regardless of row_height
 CCY_SYMBOL = {"AUD": "A$", "CAD": "C$", "USD": "US$", "BRL": "R$", "GBP": "£", "EUR": "€"}
@@ -115,8 +115,10 @@ if auto_refresh:
 symbols = tuple(data.all_symbols(CFG))
 close, adj, hist_warnings = data.fetch_history(symbols, int(SETTINGS["history_years"]))
 quotes, quote_warnings, fetched_at = data.fetch_quotes(symbols)
+company_symbols = tuple(c["yahoo"] for c in CFG["companies"] if c.get("yahoo"))
+shares = data.fetch_shares(company_symbols)
 
-table = metrics.compute_table(CFG, close, adj, quotes, base_currency, return_type)
+table = metrics.compute_table(CFG, close, adj, quotes, base_currency, return_type, shares)
 
 # Symbols that have neither a quote nor history are the "failed" ones.
 failed = sorted({w.split(":")[0] for w in hist_warnings + quote_warnings if ":" in w and not w.startswith("History")})
@@ -200,6 +202,15 @@ def fmt_time(last_time, last_date) -> str:
     if last_date is not None and not pd.isna(last_date):
         return f"{pd.Timestamp(last_date):%d/%m}"          # daily data only: show the date
     return "n/a"
+
+
+def fmt_mcap(value: float) -> str:
+    """Market cap as US$1.23B / US$456M."""
+    if value is None or np.isnan(value):
+        return "n/a"
+    if value >= 1e9:
+        return f"US${value / 1e9:,.2f}B"
+    return f"US${value / 1e6:,.0f}M"
 
 
 def fmt_pct(value: float) -> str:
@@ -295,13 +306,14 @@ STAGE_ORDER = ["Producer", "Developer"]      # anything else goes after these
 
 companies["price_str"] = [fmt_price(v, c) for v, c in zip(companies["last"], companies["display_ccy"])]
 companies["time_str"] = [fmt_time(t, d) for t, d in zip(companies["last_time"], companies["last_date"])]
+companies["mcap_str"] = [fmt_mcap(v) for v in companies["mcap_usd"]]
 companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
 companies["file_order"] = range(len(companies))
 
 # Ticker and Exchange are hidden unless the sidebar switch is on.
 MIN_MAIN_WIDTH = MIN_MAIN_WIDTH_BASE + 72 - (0 if show_ids else 64 + 72)
 id_cols = ["ticker", "exchange"] if show_ids else []
-TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "time_str"] + list(RET_LABELS) + ["spark"]
+TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "mcap_str", "time_str"] + list(RET_LABELS) + ["spark"]
 company_config = {
     "name": st.column_config.TextColumn("Name", width=165),
     "ticker": st.column_config.TextColumn("Ticker", width=64),
@@ -309,6 +321,8 @@ company_config = {
     "stage": st.column_config.TextColumn("Stage", width=78),
     "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
                                              width=95),
+    "mcap_str": st.column_config.TextColumn("Mkt cap", width=86,
+                                            help="Market cap in US dollars: shares outstanding x live price x FX."),
     "time_str": st.column_config.TextColumn("Time", width=72,
                                             help=f"Time of the last price ({SETTINGS['timezone']}). "
                                                  "ASX/TSX prices are delayed 15-20 min."),

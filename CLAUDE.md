@@ -8,7 +8,8 @@ The owner is not a developer: keep code commented, keep the README non-technical
                      lives here; adding/removing names or groups must never need a code change.
 - `data.py`        - all Yahoo (yfinance) calls. `fetch_history` (one batch, cached 6 h) and
                      `fetch_quotes` (two batched calls per refresh: 5d daily for price/prev close,
-                     1d 1-minute for the last-trade timestamp shown in the Time column). Failures -> NaN + warning
+                     1d 1-minute for the last-trade timestamp shown in the Time column).
+                     `fetch_shares` (one fast_info call per company, cached 6 h) feeds market cap. Failures -> NaN + warning
                      list, never exceptions. Prints "[data] HISTORY DOWNLOAD" when history is fetched.
 - `metrics.py`     - pure pandas: FX conversion, calendar-based returns, sparklines, group/stage
                      equal-weighted averages. No Streamlit, no network.

@@ -135,7 +135,7 @@ def sparkline(series: pd.Series, days: int = 30) -> list[float]:
 # Main entry point
 # --------------------------------------------------------------------------- #
 def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.DataFrame,
-                  base_currency: str, return_type: str) -> pd.DataFrame:
+                  base_currency: str, return_type: str, shares: dict[str, float] | None = None) -> pd.DataFrame:
     """
     Build one row per company and per (non-manual) commodity.
 
@@ -144,6 +144,7 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
     """
     hist_src = adj if return_type == "total" else close
     fx_cfg = cfg.get("fx", {})
+    shares = shares or {}
     rows = []
 
     def build_row(meta: dict, symbol: str, ccy: str, convert: bool) -> dict:
@@ -155,6 +156,12 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
 
         raw_hist = hist_src[symbol] if symbol in hist_src.columns else pd.Series(dtype="float64")
         series = splice_live_price(raw_hist, last, last_date)
+
+        # Market cap in USD = shares x live LOCAL price x (local -> USD). Always USD,
+        # regardless of the display currency.
+        mcap_usd = np.nan
+        if convert and symbol in shares and not np.isnan(last):
+            mcap_usd = shares[symbol] * last * latest_rate(ccy, "USD", fx_cfg, close)
 
         display_ccy = ccy
         if convert and base_currency.upper() != "LOCAL":
@@ -174,6 +181,7 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
             "prev_close": prev,
             "last_date": last_date,
             "last_time": last_time,
+            "mcap_usd": mcap_usd,
             "intraday": intraday,
             **rets,
             "spark": sparkline(series),

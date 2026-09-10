@@ -132,6 +132,33 @@ def _extract_field(raw: pd.DataFrame, symbols: tuple[str, ...], field: str) -> p
 
 
 # --------------------------------------------------------------------------- #
+# Shares outstanding (slow-changing, cached 6 hours) - used for market cap
+# --------------------------------------------------------------------------- #
+@st.cache_data(ttl=6 * 3600, show_spinner="Loading shares outstanding from Yahoo...")
+def fetch_shares(symbols: tuple[str, ...]) -> dict[str, float]:
+    """
+    Shares outstanding per symbol, from Ticker.fast_info. This is one small request per
+    company, so it is cached for 6 hours like the history. Market cap in the app is then
+    shares x live price x FX, which stays live between refreshes at no extra cost.
+    Missing symbols simply do not appear in the dict (the app shows n/a).
+    """
+    print(f"[data] SHARES DOWNLOAD at {dt.datetime.now():%H:%M:%S} ({len(symbols)} symbols)", flush=True)
+    out: dict[str, float] = {}
+    for s in symbols:
+        try:
+            fi = yf.Ticker(s).fast_info
+            shares = fi.get("shares")
+            if shares is None or pd.isna(shares):          # fall back to Yahoo's own market cap
+                mc, px = fi.get("marketCap"), fi.get("lastPrice")
+                shares = mc / px if mc and px else None
+            if shares:
+                out[s] = float(shares)
+        except Exception:
+            pass
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Quotes (fast-changing, cached refresh_seconds)
 # --------------------------------------------------------------------------- #
 # TTL is a few seconds shorter than the auto-refresh interval. If they were equal, a rerun

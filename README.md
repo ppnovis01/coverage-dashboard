@@ -108,6 +108,8 @@ live in the sidebar.
 
 * **Price** – latest Yahoo price in the stock's own currency, or converted to USD/BRL when
   selected in the sidebar. Commodities are always in their own unit.
+* **Mkt cap** – market capitalisation in US dollars: shares outstanding (from Yahoo, refreshed
+  every 6 hours) times the live price, converted at the current exchange rate.
 * **Time** – when the last price was traded, in your timezone. `03:10` means today at 03:10;
   `09/09 16:59` means 9 September at 16:59 (a market that is closed). ASX/TSX prices are
   delayed 15–20 minutes by Yahoo, so the time is the delayed price's time.
