@@ -63,7 +63,7 @@ REFRESH = int(SETTINGS["refresh_seconds"])
 
 # Main area must be at least this wide (CSS px) for every table column to show without
 # a horizontal scrollbar; the fit-to-screen script never zooms in beyond this.
-MIN_MAIN_WIDTH = 1700
+MIN_MAIN_WIDTH_BASE = 1700
 ROW_PX = 26          # table row height in pixels (compact so 12+ names fit on one screen)
 HEADER_PX = 35       # the header row is always this tall regardless of row_height
 CCY_SYMBOL = {"AUD": "A$", "CAD": "C$", "USD": "US$", "BRL": "R$", "GBP": "£", "EUR": "€"}
@@ -94,6 +94,7 @@ with st.sidebar:
                             help="Total = dividends reinvested (Adj Close). Price = plain close.")
     return_type = return_label.lower()
 
+    show_ids = st.toggle("Show Ticker & Exchange columns", value=False)
     auto_refresh = st.toggle(f"Auto-refresh every {REFRESH}s", value=True)
     fit_screen = st.toggle("Fit to one screen", value=True,
                            help="Scales the main area so everything fits your window height without scrolling.")
@@ -191,6 +192,16 @@ def fmt_price(value: float, ccy: str) -> str:
     return f"{sym}{value:,.{decimals}f}"
 
 
+def fmt_time(last_time, last_date) -> str:
+    """Time of the last price in the user's timezone: HH:MM today, else dd/mm HH:MM."""
+    if last_time is not None and not pd.isna(last_time):
+        t = pd.Timestamp(last_time).tz_convert(TZ)
+        return f"{t:%H:%M}" if t.date() == dt.datetime.now(TZ).date() else f"{t:%d/%m %H:%M}"
+    if last_date is not None and not pd.isna(last_date):
+        return f"{pd.Timestamp(last_date):%d/%m}"          # daily data only: show the date
+    return "n/a"
+
+
 def fmt_pct(value: float) -> str:
     return "n/a" if value is None or np.isnan(value) else f"{value:+.2%}"
 
@@ -262,7 +273,8 @@ if len(comm):
                 price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} <small>{r['unit']}</small>"
                 st.markdown(f"<div class='card'><div class='nm' title='{r['name']}'>{r['name']}</div>"
                             f"<div class='px'>{price}</div>"
-                            f"<div class='sub'>{pct_span(r['intraday'])} &nbsp;·&nbsp; {pct_span(r['YTD'], 'YTD')}</div></div>",
+                            f"<div class='sub'>{pct_span(r['intraday'])} &nbsp;·&nbsp; {pct_span(r['YTD'], 'YTD')}"
+                            f" &nbsp;·&nbsp; <span class='na'>{fmt_time(r['last_time'], r['last_date'])}</span></div></div>",
                             unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------- #
@@ -282,10 +294,14 @@ for c in CFG["companies"]:
 STAGE_ORDER = ["Producer", "Developer"]      # anything else goes after these
 
 companies["price_str"] = [fmt_price(v, c) for v, c in zip(companies["last"], companies["display_ccy"])]
+companies["time_str"] = [fmt_time(t, d) for t, d in zip(companies["last_time"], companies["last_date"])]
 companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
 companies["file_order"] = range(len(companies))
 
-TABLE_COLS = ["name", "ticker", "exchange", "stage", "price_str"] + list(RET_LABELS) + ["spark"]
+# Ticker and Exchange are hidden unless the sidebar switch is on.
+MIN_MAIN_WIDTH = MIN_MAIN_WIDTH_BASE + 72 - (0 if show_ids else 64 + 72)
+id_cols = ["ticker", "exchange"] if show_ids else []
+TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "time_str"] + list(RET_LABELS) + ["spark"]
 company_config = {
     "name": st.column_config.TextColumn("Name", width=165),
     "ticker": st.column_config.TextColumn("Ticker", width=64),
@@ -293,6 +309,9 @@ company_config = {
     "stage": st.column_config.TextColumn("Stage", width=78),
     "price_str": st.column_config.TextColumn(f"Price ({'local' if base_currency == 'LOCAL' else base_currency})",
                                              width=95),
+    "time_str": st.column_config.TextColumn("Time", width=72,
+                                            help=f"Time of the last price ({SETTINGS['timezone']}). "
+                                                 "ASX/TSX prices are delayed 15-20 min."),
     **return_column_config(width=64, spark_width=70),
 }
 

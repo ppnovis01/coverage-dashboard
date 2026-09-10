@@ -1,7 +1,7 @@
 settings:
   refresh_seconds: 60
   history_years: 2
-  base_currency: USD          # options: LOCAL, USD, BRL
+  base_currency: LOCAL         # options: LOCAL, USD, BRL
   return_type: total          # options: total (dividend-adjusted), price
   timezone: America/Sao_Paulo
 

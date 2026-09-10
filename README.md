@@ -19,8 +19,11 @@ streamlit run app.py
 A browser tab opens at http://localhost:8501. Leave the terminal window open while you use it.
 
 The side panel with the currency / return-type switches is closed by default to save space.
-Open it with the small arrow at the top-left. "Fit to one screen" (on by default) scales the
-page so the whole dashboard fits your window height without scrolling.
+Open it with the small arrow at the top-left. There you can switch currency (LOCAL by default),
+Total/Price returns, show the Ticker and Exchange columns (hidden by default), and turn
+"Fit to one screen" on or off. Fit-to-screen enlarges the page on big monitors so it fills the
+window; on small laptop screens it shows a tip with the browser zoom level to use instead
+(press Ctrl and minus). The browser remembers the zoom for the site.
 
 The first load downloads two years of history (a few seconds). After that, prices refresh
 every 60 seconds automatically; history is refreshed only every 6 hours.
@@ -105,6 +108,9 @@ live in the sidebar.
 
 * **Price** – latest Yahoo price in the stock's own currency, or converted to USD/BRL when
   selected in the sidebar. Commodities are always in their own unit.
+* **Time** – when the last price was traded, in your timezone. `03:10` means today at 03:10;
+  `09/09 16:59` means 9 September at 16:59 (a market that is closed). ASX/TSX prices are
+  delayed 15–20 minutes by Yahoo, so the time is the delayed price's time.
 * **Intraday %** – change versus the previous close.
 * **1W / 1M / 3M / 1Y** – change versus the price 7 days / 1 / 3 months / 1 year earlier
   (calendar based).

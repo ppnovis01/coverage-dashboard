@@ -7,7 +7,8 @@ The owner is not a developer: keep code commented, keep the README non-technical
 - `universe.yaml`  - THE config. Companies, commodities, FX pairs, settings. All customisation
                      lives here; adding/removing names or groups must never need a code change.
 - `data.py`        - all Yahoo (yfinance) calls. `fetch_history` (one batch, cached 6 h) and
-                     `fetch_quotes` (one batch, cached `refresh_seconds`). Failures -> NaN + warning
+                     `fetch_quotes` (two batched calls per refresh: 5d daily for price/prev close,
+                     1d 1-minute for the last-trade timestamp shown in the Time column). Failures -> NaN + warning
                      list, never exceptions. Prints "[data] HISTORY DOWNLOAD" when history is fetched.
 - `metrics.py`     - pure pandas: FX conversion, calendar-based returns, sparklines, group/stage
                      equal-weighted averages. No Streamlit, no network.
@@ -22,6 +23,8 @@ The owner is not a developer: keep code commented, keep the README non-technical
 - "Refresh now" must clear only `fetch_quotes` (not history).
 - Yahoo rate limits are the main operational risk: keep one history download per 6 h and one
   quote batch per `refresh_seconds`; never loop one HTTP call per ticker in the app path.
+- Layout: fit-to-screen only scales UP (CSS transform). Scaling down breaks Streamlit's table
+  sizing (it clamps tables to the on-screen container width), so small screens get a browser-zoom hint.
 - Known data gap: UX=F has ~1 row of history on Yahoo, so its returns are n/a by design.
 
 ## Environment

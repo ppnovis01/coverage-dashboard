@@ -151,6 +151,7 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
         last = float(q["last"]) if q is not None else np.nan
         prev = float(q["prev_close"]) if q is not None else np.nan
         last_date = q["last_date"] if q is not None else pd.NaT
+        last_time = q["last_time"] if q is not None and "last_time" in q.index else pd.NaT
 
         raw_hist = hist_src[symbol] if symbol in hist_src.columns else pd.Series(dtype="float64")
         series = splice_live_price(raw_hist, last, last_date)
@@ -171,6 +172,8 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
             "display_ccy": display_ccy,
             "last": last,
             "prev_close": prev,
+            "last_date": last_date,
+            "last_time": last_time,
             "intraday": intraday,
             **rets,
             "spark": sparkline(series),
@@ -189,7 +192,7 @@ def compute_table(cfg: dict, close: pd.DataFrame, adj: pd.DataFrame, quotes: pd.
             price = c.get("price")
             rows.append({**meta, "ticker": "manual", "display_ccy": "",
                          "last": float(price) if price is not None else np.nan,
-                         "prev_close": np.nan, "as_of": c.get("as_of"),
+                         "prev_close": np.nan, "last_date": pd.NaT, "last_time": pd.NaT, "as_of": c.get("as_of"),
                          **{k: np.nan for k in RETURN_COLS}, "spark": []})
         else:
             rows.append(build_row(meta, c["yahoo"], "", convert=False))

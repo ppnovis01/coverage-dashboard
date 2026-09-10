@@ -148,6 +148,8 @@ def fetch_quotes(symbols: tuple[str, ...]) -> tuple[pd.DataFrame, list[str], dt.
       last        - most recent price (today's live price while the market is open)
       prev_close  - the close before that
       last_date   - the date of `last`
+      last_time   - timestamp (UTC) of the last traded minute, from a second batched
+                    1-minute download; NaT when Yahoo has no intraday bars for the symbol
     Strategy: yf.download(period="5d") is one HTTP call for everything. Only symbols that
     come back empty fall back to Ticker.fast_info (one call each), so a healthy universe
     costs a single request per refresh.
@@ -194,4 +196,24 @@ def _quote_batch(symbols: tuple[str, ...]) -> tuple[pd.DataFrame, list[str], dt.
             warnings.append(f"{s}: no quote available (symbol not found?)")
 
     quotes = pd.DataFrame.from_dict(rows, orient="index")
+
+    # Second batched call: 1-minute bars for today (or the last session). The timestamp of the
+    # last bar is the "Time" shown in the tables. Purely informational - if it fails we still
+    # have prices, so no warning is raised for the user.
+    times: dict[str, pd.Timestamp] = {}
+    try:
+        raw_m = yf.download(list(symbols), period="1d", interval="1m", auto_adjust=False,
+                            group_by="ticker", threads=True, progress=False)
+        for s in symbols:
+            try:
+                col = raw_m[(s, "Close")] if isinstance(raw_m.columns, pd.MultiIndex) else raw_m["Close"]
+                col = col.dropna()
+                if len(col):
+                    ts = pd.Timestamp(col.index[-1])
+                    times[s] = ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC")
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"[data] 1-minute batch failed: {exc}", flush=True)
+    quotes["last_time"] = pd.Series({s: times.get(s, pd.NaT) for s in symbols}, dtype="datetime64[ns, UTC]")
     return quotes, warnings, fetched_at
