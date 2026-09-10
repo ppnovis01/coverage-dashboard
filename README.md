@@ -79,7 +79,7 @@ NdPr oxide has no Yahoo quote, so you type it in by hand:
   - {name: NdPr oxide (manual, SMM), yahoo: null, unit: USD/kg, kind: manual, price: 62.5, as_of: 2026-09-09}
 ```
 
-The card shows the price greyed out with the `as_of` date. Manual rows never call Yahoo.
+The row shows the typed price and `as of <date>` in the Time column. Manual rows never call Yahoo.
 
 ### Add a currency
 Under `fx:` add the Yahoo FX symbol. Two naming styles exist and both are handled:

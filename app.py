@@ -43,10 +43,6 @@ st.markdown(
       .open   { background:#1f6f43; color:#e6ffe6; }
       .closed { background:#5a2d2d; color:#ffe6e6; }
       .grp { font-weight:700; font-size:0.85rem; color:#cfcfcf; margin:0.15rem 0 0.05rem 0; }
-      .card { border:1px solid #333; border-radius:8px; padding:0.35rem 0.55rem; line-height:1.25; }
-      .card .nm { font-size:0.74rem; color:#b0b0b0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .card .px { font-size:1.15rem; font-weight:600; }
-      .card .sub { font-size:0.74rem; }
       .up { color:#3ddc84; } .dn { color:#ff5c5c; } .na { color:#8a8a8a; }
       .manual { color:#8a8a8a; }
       .footer { color:#8a8a8a; font-size:0.78rem; margin-top:0.8rem; }
@@ -217,16 +213,17 @@ def fmt_pct(value: float) -> str:
     return "n/a" if value is None or np.isnan(value) else f"{value:+.2%}"
 
 
-def color_returns(val):
-    """Green for positive, red for negative, grey for missing (used with pandas Styler)."""
-    if val is None or (isinstance(val, float) and np.isnan(val)):
-        return "color: #8a8a8a"
-    return "color: #3ddc84" if val > 0 else ("color: #ff5c5c" if val < 0 else "")
+def color_returns(val: str):
+    """Green for '+', red for '-' (cells are pre-formatted strings; blank = no data)."""
+    if not val:
+        return ""
+    return "color: #3ddc84" if val.startswith("+") else ("color: #ff5c5c" if val.startswith("-") else "")
 
 
 def return_column_config(width: int = 64, fmt: str = "%+.2f%%", spark_width: int = 75) -> dict:
     """Column settings for the seven return columns + sparkline. Widths are pixels."""
-    cfg = {k: st.column_config.NumberColumn(v, format=fmt, width=width) for k, v in RET_LABELS.items()}
+    # Returns are pre-formatted text (see show_table), so plain text columns are used here.
+    cfg = {k: st.column_config.TextColumn(v, width=width) for k, v in RET_LABELS.items()}
     cfg["spark"] = st.column_config.LineChartColumn("30d", width=spark_width)
     return cfg
 
@@ -243,10 +240,10 @@ def table_width(config: dict, columns: list[str]) -> int:
 def show_table(df: pd.DataFrame, columns: list[str], config: dict, key: str) -> None:
     """Render a compact st.dataframe with coloured return cells."""
     view = df[columns].copy()
-    for k in RET_LABELS:
-        if k in view.columns:
-            view[k] = view[k] * 100          # fractions -> percent numbers for the NumberColumn format
-    styler = view.style.map(color_returns, subset=[k for k in RET_LABELS if k in view.columns])
+    ret_cols = [k for k in RET_LABELS if k in view.columns]
+    for k in ret_cols:                       # fractions -> "+1.23%" text, blank when missing
+        view[k] = ["" if pd.isna(v) else f"{v * 100:+.2f}%" for v in view[k]]
+    styler = view.style.map(color_returns, subset=ret_cols)
     height = ROW_PX * len(view) + HEADER_PX + 3   # exact fit, no inner scrollbar
     # A fixed pixel width (not "stretch") keeps the grid correctly sized when the
     # fit-to-screen script scales the page.
@@ -261,32 +258,34 @@ st.subheader("Commodities")
 comm = table[~table["is_company"]].reset_index(drop=True)
 
 
-def pct_span(value: float, label: str = "") -> str:
-    """Small coloured percentage for the commodity cards."""
-    if value is None or np.isnan(value):
-        return f"<span class='na'>{label} n/a</span>"
-    cls = "up" if value > 0 else ("dn" if value < 0 else "")
-    return f"<span class='{cls}'>{label} {value:+.2%}</span>"
+def fmt_comm_price(r) -> str:
+    return "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f}"
+
+
+def fmt_comm_time(r) -> str:
+    if r["kind"] == "manual":
+        as_of = r.get("as_of")
+        as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
+        return f"as of {as_of}"
+    return fmt_time(r["last_time"], r["last_date"])
 
 
 if len(comm):
-    cols = st.columns(len(comm))
-    for col, (_, r) in zip(cols, comm.iterrows()):
-        with col:
-            if r["kind"] == "manual":
-                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} <small>{r['unit']}</small>"
-                as_of = r.get("as_of")
-                as_of = "no date" if as_of is None or (isinstance(as_of, float) and np.isnan(as_of)) else as_of
-                st.markdown(f"<div class='card manual'><div class='nm' title='{r['name']}'>{r['name']}</div>"
-                            f"<div class='px'>{price}</div><div class='sub'>manual · as of {as_of}</div></div>",
-                            unsafe_allow_html=True)
-            else:
-                price = "n/a" if np.isnan(r["last"]) else f"{r['last']:,.2f} <small>{r['unit']}</small>"
-                st.markdown(f"<div class='card'><div class='nm' title='{r['name']}'>{r['name']}</div>"
-                            f"<div class='px'>{price}</div>"
-                            f"<div class='sub'>{pct_span(r['intraday'])} &nbsp;·&nbsp; {pct_span(r['YTD'], 'YTD')}"
-                            f" &nbsp;·&nbsp; <span class='na'>{fmt_time(r['last_time'], r['last_date'])}</span></div></div>",
-                            unsafe_allow_html=True)
+    comm["price_str"] = [fmt_comm_price(r) for _, r in comm.iterrows()]
+    comm["time_str"] = [fmt_comm_time(r) for _, r in comm.iterrows()]
+    comm["kind_str"] = comm["kind"].str.capitalize()
+    COMM_COLS = ["name", "kind_str", "unit", "price_str", "time_str"] + list(RET_LABELS) + ["spark"]
+    comm_config = {
+        "name": st.column_config.TextColumn("Commodity", width=230),
+        "kind_str": st.column_config.TextColumn("Kind", width=64,
+                                                help="Futures = front-month contract; Proxy = listed fund/trust; "
+                                                     "Manual = typed into universe.yaml"),
+        "unit": st.column_config.TextColumn("Unit", width=72),
+        "price_str": st.column_config.TextColumn("Price", width=86),
+        "time_str": st.column_config.TextColumn("Time", width=92),
+        **return_column_config(width=64, spark_width=70),
+    }
+    show_table(comm, COMM_COLS, comm_config, key="tbl_commodities")
 
 # --------------------------------------------------------------------------- #
 # Section 2 - Portfolio, one block per commodity group
