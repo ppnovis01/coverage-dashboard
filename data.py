@@ -28,6 +28,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 
 UNIVERSE_PATH = Path(__file__).with_name("universe.yaml")
 
+# All company-table columns that can be shown, with their labels. Ticker/Exchange are off by default.
+ALL_COLUMNS = {"ticker": "Ticker", "exchange": "Exchange", "stage": "Stage", "price": "Price",
+               "mcap": "Mkt cap", "time": "Time", "intraday": "Intraday %", "1W": "1W", "1M": "1M",
+               "3M": "3M", "MTD": "MTD", "YTD": "YTD", "1Y": "1Y", "spark": "30d"}
+DEFAULT_COLUMNS = ["stage", "price", "mcap", "time", "intraday", "1W", "1M", "3M", "MTD", "YTD", "1Y", "spark"]
+
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -43,6 +49,8 @@ def load_universe(path: Path = UNIVERSE_PATH) -> dict:
     settings.setdefault("base_currency", "LOCAL")
     settings.setdefault("return_type", "total")
     settings.setdefault("timezone", "UTC")
+    # Visible company-table columns, in order (Name is always first). Editable in the Edit view.
+    settings.setdefault("columns", list(DEFAULT_COLUMNS))
 
     cfg.setdefault("fx", {})
     cfg.setdefault("companies", [])

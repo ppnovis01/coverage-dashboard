@@ -17,6 +17,12 @@ The owner is not a developer: keep code commented, keep the README non-technical
                      Graph (Plotly, multi-asset, rebased to 100). st.tabs is avoided on purpose: it resets
                      to the first tab on every auto-refresh rerun. Auto-refresh is paused on Graph. Sidebar (currency, return type, auto-refresh, refresh-now, failed
                      symbols), commodity cards, per-group tables, summary table, footer.
+- `editor.py`      - Edit view persistence: writes universe.yaml (one-line-per-name layout) and pushes it
+                     to GitHub via the Contents API when `st.secrets["github"]["token"]` exists. Needed because
+                     Streamlit Cloud's disk is ephemeral. Secrets template: .streamlit/secrets.toml.example.
+- Edit view (app.py) uses streamlit-sortables for drag-reorder (groups, companies across groups, columns)
+  and st.data_editor for add/remove/correct rows. Draft lives in st.session_state["draft"] until Save.
+  settings.columns (list) drives the visible company-table columns and their order.
 - `check_universe.py` - CLI symbol validator (`python check_universe.py`).
 - `.streamlit/config.toml` - dark theme; `layout="wide"` is set in app.py.
 

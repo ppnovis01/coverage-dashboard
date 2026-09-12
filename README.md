@@ -20,8 +20,8 @@ A browser tab opens at http://localhost:8501. Leave the terminal window open whi
 
 The side panel with the currency / return-type switches is closed by default to save space.
 Open it with the small arrow at the top-left. There you can switch currency (LOCAL by default),
-Total/Price returns, show the Ticker and Exchange columns (hidden by default), and turn
-"Fit to one screen" on or off. Fit-to-screen enlarges the page on big monitors so it fills the
+Total/Price returns, and turn "Fit to one screen" on or off. Which columns the tables show
+is chosen in the Edit view. Fit-to-screen enlarges the page on big monitors so it fills the
 window; on small laptop screens it shows a tip with the browser zoom level to use instead
 (press Ctrl and minus). The browser remembers the zoom for the site.
 
@@ -113,7 +113,49 @@ timeframe so you can compare performance. The lines use the currency and return 
 in the side panel. Auto-refresh pauses while you are on the Graph view so the chart does not
 reset while you are zooming; click **Overview** to go back to the live tables.
 
-## 5. What the numbers mean
+## 5. The Edit view (change the dashboard without touching files)
+
+Click **Edit** under the title. There you can:
+
+* drag the groups into a new order;
+* drag companies up and down inside a group, or into another group;
+* add, remove or correct companies and commodities in a table (press **Apply table edits**
+  after changing a table);
+* tick which columns the company tables show and drag them into order;
+* change the refresh interval, default currency, return type and timezone.
+
+Nothing happens until you press **Save**. Save first checks any new ticker with Yahoo and
+refuses to save if one is not recognised. **Discard** throws the draft away.
+
+### Making saves reach the public app (one-time setup, about two minutes)
+
+The public app on Streamlit Cloud forgets file changes when it restarts, so Save also writes
+`universe.yaml` to GitHub. For that it needs permission, in the form of a GitHub token:
+
+1. On GitHub, open https://github.com/settings/personal-access-tokens/new
+2. Token name: `dashboard`. Expiration: pick 1 year (you will repeat this step when it expires).
+3. Under **Repository access** choose *Only select repositories* and pick `coverage-dashboard`.
+4. Under **Permissions -> Repository permissions**, set **Contents** to *Read and write*.
+   Leave everything else alone. Click **Generate token** and copy it (it is shown only once).
+5. Open your app on https://share.streamlit.io, click **Manage app** (bottom right) ->
+   **Settings** -> **Secrets**, and paste:
+
+```toml
+[github]
+token = "PASTE_THE_TOKEN_HERE"
+repo = "ppnovis01/coverage-dashboard"
+branch = "main"
+```
+
+6. Click **Save**. The app restarts and from then on the Edit view's Save button commits to
+   GitHub, and the public app redeploys itself within a minute.
+
+To use the same on your own computer, copy `.streamlit/secrets.toml.example` to
+`.streamlit/secrets.toml` and paste the token there. That file is ignored by git on purpose.
+Without a token, Save still works on your computer (it writes the local file), and you can
+push the change to GitHub yourself or ask me to.
+
+## 6. What the numbers mean
 
 * **Price** – latest Yahoo price in the stock's own currency, or converted to USD/BRL when
   selected in the sidebar. Commodities are always in their own unit.
@@ -134,7 +176,7 @@ reset while you are zooming; click **Overview** to go back to the live tables.
 Some thinly traded futures (for example UX=F) have very little history on Yahoo, so their
 returns show `n/a` even though the price is fine.
 
-## 6. Deploy to Streamlit Community Cloud (free)
+## 7. Deploy to Streamlit Community Cloud (free)
 
 1. Put this folder in a GitHub repository (all files, including `.streamlit/config.toml`).
 2. Go to https://share.streamlit.io, sign in with GitHub, click **New app**.
@@ -144,7 +186,7 @@ returns show `n/a` even though the price is fine.
 Note: Yahoo Finance sometimes rate-limits cloud servers. If the app shows many `n/a`
 values after a deploy, wait a few minutes and press **Refresh now** in the sidebar.
 
-## 7. Files
+## 8. Files
 
 | File | Role |
 |------|------|
@@ -152,6 +194,7 @@ values after a deploy, wait a few minutes and press **Refresh now** in the sideb
 | `app.py` | Screen layout (Streamlit). |
 | `data.py` | Downloads from Yahoo Finance, with caching. |
 | `metrics.py` | Return calculations and currency conversion. |
+| `editor.py` | Saving `universe.yaml` from the Edit view, locally and to GitHub. |
 | `check_universe.py` | Symbol checker (`python check_universe.py`). |
 | `.streamlit/config.toml` | Dark theme and layout. |
 | `requirements.txt` | Python packages. |

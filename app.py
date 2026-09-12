@@ -13,12 +13,16 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import streamlit as st
+import copy
+
 import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from streamlit_autorefresh import st_autorefresh
 
 import data
+import editor
 import metrics
+from streamlit_sortables import sort_items
 
 # --------------------------------------------------------------------------- #
 # Page setup
@@ -48,6 +52,7 @@ st.markdown(
       .manual { color:#8a8a8a; }
       .footer { color:#8a8a8a; font-size:0.78rem; margin-top:0.8rem; }
       .hint { display:block; color:#f0c674; font-size:0.78rem; }
+      iframe[title*="sortable"] { margin-top: 0.4rem; }   /* breathing room under the Edit-view labels */
     </style>
     """,
     unsafe_allow_html=True,
@@ -58,9 +63,6 @@ SETTINGS = CFG["settings"]
 TZ = ZoneInfo(SETTINGS["timezone"])
 REFRESH = int(SETTINGS["refresh_seconds"])
 
-# Main area must be at least this wide (CSS px) for every table column to show without
-# a horizontal scrollbar; the fit-to-screen script never zooms in beyond this.
-MIN_MAIN_WIDTH_BASE = 1700 + 86      # +86 for the market cap column
 ROW_PX = 26          # table row height in pixels (compact so 12+ names fit on one screen)
 HEADER_PX = 35       # the header row is always this tall regardless of row_height
 CCY_SYMBOL = {"AUD": "A$", "CAD": "C$", "USD": "US$", "BRL": "R$", "GBP": "£", "EUR": "€"}
@@ -91,7 +93,6 @@ with st.sidebar:
                             help="Total = dividends reinvested (Adj Close). Price = plain close.")
     return_type = return_label.lower()
 
-    show_ids = st.toggle("Show Ticker & Exchange columns", value=False)
     auto_refresh = st.toggle(f"Auto-refresh every {REFRESH}s", value=True)
     fit_screen = st.toggle("Fit to one screen", value=True,
                            help="Scales the main area so everything fits your window height without scrolling.")
@@ -156,14 +157,14 @@ with h1:
     st.title("Coverage Dashboard")
     # Which "tab" is showing. A segmented control (not st.tabs) is used because it remembers
     # the choice across the automatic reruns - st.tabs would jump back to Overview every minute.
-    view = st.segmented_control("View", ["Overview", "Graph"], default="Overview", key="view",
+    view = st.segmented_control("View", ["Overview", "Graph", "Edit"], default="Overview", key="view",
                                 label_visibility="collapsed") or "Overview"
 with h2:
     st.markdown(
         f"<div style='text-align:right; padding-top:1.2rem'>"
         f"<b>Last refresh:</b> {last_refresh_local:%Y-%m-%d %H:%M:%S} ({SETTINGS['timezone']}) &nbsp;·&nbsp; "
         + (f"<b>Next in:</b> <span id='cd'>{seconds_left}</span>s" if view == "Overview"
-           else "<b>auto-refresh paused on Graph</b>") + f"<br/>{market_badges()}"
+           else f"<b>auto-refresh paused on {view}</b>") + f"<br/>{market_badges()}"
         + (f"<span class='badge closed'>no data: {', '.join(failed)}</span>" if failed else "")
         + "<span id='fit-hint' class='hint'></span></div>",
         unsafe_allow_html=True,
@@ -317,10 +318,9 @@ if view == "Overview":
     companies["stage_rank"] = companies["stage"].map(lambda s: STAGE_ORDER.index(s) if s in STAGE_ORDER else 99)
     companies["file_order"] = range(len(companies))
 
-    # Ticker and Exchange are hidden unless the sidebar switch is on.
-    MIN_MAIN_WIDTH = MIN_MAIN_WIDTH_BASE + 72 - (0 if show_ids else 64 + 72)
-    id_cols = ["ticker", "exchange"] if show_ids else []
-    TABLE_COLS = ["name"] + id_cols + ["stage", "price_str", "mcap_str", "time_str"] + list(RET_LABELS) + ["spark"]
+    # Visible columns and their order come from settings.columns (editable in the Edit view).
+    COL_TO_FIELD = {"price": "price_str", "mcap": "mcap_str", "time": "time_str"}
+    TABLE_COLS = ["name"] + [COL_TO_FIELD.get(c, c) for c in SETTINGS["columns"] if c in data.ALL_COLUMNS]
     company_config = {
         "name": st.column_config.TextColumn("Name", width=165),
         "ticker": st.column_config.TextColumn("Ticker", width=64),
@@ -335,6 +335,9 @@ if view == "Overview":
                                                      "ASX/TSX prices are delayed 15-20 min."),
         **return_column_config(width=64, spark_width=70),
     }
+
+    # The main area must be wide enough for the company table (60% of it) - used by fit-to-screen.
+    MIN_MAIN_WIDTH = int(table_width(company_config, TABLE_COLS) / 0.6) + 112
 
     with left:
         for g in group_order:
@@ -372,7 +375,7 @@ if view == "Overview":
 # =========================================================================== #
 # GRAPH VIEW - pick assets and a timeframe; 2+ assets are rebased to 100
 # =========================================================================== #
-else:
+elif view == "Graph":
     hist_src = adj if return_type == "total" else close
 
     # Everything with a Yahoo symbol can be charted: companies + non-manual commodities.
@@ -454,6 +457,173 @@ else:
                f" · companies in {'local currency' if base_currency == 'LOCAL' else base_currency}"
                f" · commodities in their own unit · daily closes plus today's live price")
 
+
+# =========================================================================== #
+# EDIT VIEW - change universe.yaml from inside the dashboard
+# =========================================================================== #
+else:
+    st.subheader("Edit the dashboard")
+    st.caption("Drag to reorder. Use the tables to add, remove or correct names. Nothing changes until "
+               "you press **Save** at the bottom; **Discard** throws the draft away.")
+
+    # The draft is a copy of the config that lives in the session until saved.
+    if "draft" not in st.session_state:
+        st.session_state["draft"] = copy.deepcopy(CFG)
+    draft = st.session_state["draft"]
+
+    def label_of(c: dict) -> str:
+        return f"{c['name']} ({c['yahoo']}) · {c.get('stage', '')}"
+
+    def groups_in(companies: list[dict]) -> list[str]:
+        out: list[str] = []
+        for c in companies:
+            if c.get("commodity") not in out:
+                out.append(c.get("commodity"))
+        return out
+
+    # -- 1. group order (drag left/right) ---------------------------------------
+    st.markdown("**1. Order of the groups** (drag)")
+    groups = groups_in(draft["companies"])
+    new_groups = sort_items(groups, direction="horizontal", key="sort_groups_" + "|".join(groups))
+    if new_groups != groups:
+        draft["companies"].sort(key=lambda c: new_groups.index(c.get("commodity")))
+        st.rerun()
+
+    # -- 2. companies inside / between groups (drag) ------------------------------
+    st.markdown("**2. Companies** (drag up/down to reorder, or into another group to move it)")
+    containers = [{"header": g, "items": [label_of(c) for c in draft["companies"] if c.get("commodity") == g]}
+                  for g in groups]
+    key2 = "sort_companies_" + str(hash(tuple(label_of(c) + c.get("commodity", "") for c in draft["companies"])))
+    result = sort_items(containers, multi_containers=True, direction="vertical", key=key2)
+    by_label = {label_of(c): c for c in draft["companies"]}
+    rebuilt = []
+    for cont in result:
+        for lab in cont["items"]:
+            c = by_label[lab]
+            c["commodity"] = cont["header"]
+            rebuilt.append(c)
+    if [label_of(c) + c["commodity"] for c in rebuilt] != [label_of(c) + c["commodity"] for c in draft["companies"]]:
+        draft["companies"] = rebuilt
+        st.rerun()
+
+    # -- 3. add / remove / correct companies (table) ------------------------------
+    st.markdown("**3. Company details** (edit cells; use the + row at the bottom to add, select a row "
+                "and press Delete to remove; then press *Apply table edits*)")
+    exch_opts = sorted(set(list(MARKET_HOURS) + [c.get("exchange", "") for c in draft["companies"]]) - {""})
+    ccy_opts = sorted(set(list(CFG["fx"]) + ["USD"] + [c.get("ccy", "") for c in draft["companies"]]) - {""})
+    comp_df = pd.DataFrame([{k: c.get(k, "") for k in editor.COMPANY_KEYS} for c in draft["companies"]])
+    edited = st.data_editor(
+        comp_df, num_rows="dynamic", hide_index=True, key="edit_companies",
+        column_config={
+            "name": st.column_config.TextColumn("Name", required=True),
+            "yahoo": st.column_config.TextColumn("Yahoo ticker", required=True, help="e.g. LYC.AX, NEO.TO, CCJ"),
+            "exchange": st.column_config.SelectboxColumn("Exchange", options=exch_opts, required=True),
+            "ccy": st.column_config.SelectboxColumn("Currency", options=ccy_opts, required=True),
+            "commodity": st.column_config.TextColumn("Group", required=True, help="A new name creates a new group"),
+            "stage": st.column_config.SelectboxColumn("Stage", options=["Producer", "Developer"], required=True),
+        },
+    )
+    if st.button("Apply table edits", key="apply_companies"):
+        rows = [r for r in edited.fillna("").to_dict("records") if str(r["name"]).strip() and str(r["yahoo"]).strip()]
+        for r in rows:
+            r["yahoo"] = str(r["yahoo"]).strip().upper()
+            r["name"] = str(r["name"]).strip()
+        draft["companies"] = rows
+        st.rerun()
+
+    # -- 4. commodities -------------------------------------------------------------
+    st.markdown("**4. Commodities** (same idea; kind *manual* = you type the price yourself)")
+    comm_df = pd.DataFrame([{k: c.get(k) for k in editor.COMMODITY_KEYS} for c in draft["commodities"]])
+    comm_edited = st.data_editor(
+        comm_df, num_rows="dynamic", hide_index=True, key="edit_commodities",
+        column_config={
+            "name": st.column_config.TextColumn("Name", required=True),
+            "yahoo": st.column_config.TextColumn("Yahoo symbol", help="Leave empty for manual rows"),
+            "unit": st.column_config.TextColumn("Unit"),
+            "kind": st.column_config.SelectboxColumn("Kind", options=["futures", "proxy", "manual"], required=True),
+            "price": st.column_config.NumberColumn("Manual price"),
+            "as_of": st.column_config.TextColumn("Manual as of", help="e.g. 2026-09-10"),
+        },
+    )
+
+    def blank(v) -> bool:
+        return v is None or (isinstance(v, float) and np.isnan(v)) or str(v).strip() == ""
+
+    if st.button("Apply table edits", key="apply_commodities"):
+        rows = []
+        for r in comm_edited.to_dict("records"):
+            if blank(r.get("name")):
+                continue
+            row = {"name": str(r["name"]).strip(),
+                   "yahoo": None if blank(r.get("yahoo")) else str(r["yahoo"]).strip().upper(),
+                   "unit": "" if blank(r.get("unit")) else str(r["unit"]),
+                   "kind": "futures" if blank(r.get("kind")) else str(r["kind"])}
+            if row["kind"] == "manual":
+                row["yahoo"] = None
+                row["price"] = None if blank(r.get("price")) else float(r["price"])
+                row["as_of"] = None if blank(r.get("as_of")) else str(r["as_of"])
+            rows.append(row)
+        draft["commodities"] = rows
+        st.rerun()
+
+    # -- 5. columns ---------------------------------------------------------------
+    st.markdown("**5. Table columns** (tick what to show, drag to order)")
+    visible = st.multiselect("Visible columns", list(data.ALL_COLUMNS), default=draft["settings"]["columns"],
+                             format_func=lambda k: data.ALL_COLUMNS[k], key="cols_visible")
+    ordered_prev = [c for c in draft["settings"]["columns"] if c in visible] + \
+                   [c for c in visible if c not in draft["settings"]["columns"]]
+    labels = [data.ALL_COLUMNS[c] for c in ordered_prev]
+    new_labels = sort_items(labels, direction="horizontal", key="sort_cols_" + "|".join(labels))
+    back = {v: k for k, v in data.ALL_COLUMNS.items()}
+    new_cols = [back[l] for l in new_labels]
+    if new_cols != draft["settings"]["columns"]:
+        draft["settings"]["columns"] = new_cols
+        st.rerun()
+
+    # -- 6. settings --------------------------------------------------------------
+    st.markdown("**6. Settings**")
+    s1, s2, s3, s4, s5 = st.columns(5)
+    draft["settings"]["refresh_seconds"] = int(s1.number_input("Refresh (seconds)", 30, 3600,
+                                                               int(draft["settings"]["refresh_seconds"]), 10))
+    draft["settings"]["history_years"] = int(s2.number_input("History (years)", 1, 10,
+                                                             int(draft["settings"]["history_years"])))
+    ccys = ["LOCAL", "USD", "BRL"]
+    draft["settings"]["base_currency"] = s3.selectbox("Default currency", ccys,
+                                                      ccys.index(draft["settings"]["base_currency"]))
+    rts = ["total", "price"]
+    draft["settings"]["return_type"] = s4.selectbox("Default return type", rts,
+                                                    rts.index(draft["settings"]["return_type"]))
+    draft["settings"]["timezone"] = s5.text_input("Timezone", draft["settings"]["timezone"])
+
+    # -- Save / discard -------------------------------------------------------------
+    st.divider()
+    if editor.github_settings() is None:
+        st.info("No GitHub token configured: Save writes universe.yaml on this computer only. "
+                "See the README for the two-minute setup that makes saves reach the public app.")
+    b1, b2, _ = st.columns([1, 1, 4])
+    if b1.button("Save", type="primary", use_container_width=True):
+        problems = []
+        known = set(data.all_symbols(CFG))
+        with st.spinner("Checking new symbols with Yahoo..."):
+            for c in draft["companies"] + [x for x in draft["commodities"] if x.get("yahoo")]:
+                if c["yahoo"] not in known:
+                    ok, msg = editor.check_symbol(c["yahoo"])
+                    if not ok:
+                        problems.append(f"{c['name']} ({c['yahoo']}): {msg}")
+        if problems:
+            st.error("Not saved. Fix these symbols first:\n\n" + "\n".join(f"- {p}" for p in problems))
+        else:
+            text = editor.save_local(draft)
+            ok, msg = editor.push_to_github(text, "Update universe.yaml from the dashboard Edit view")
+            (st.success if ok else st.warning)(msg)
+            # symbols may have changed: forget cached data so the next load fetches the new set
+            data.fetch_history.clear(); data.fetch_quotes.clear(); data.fetch_shares.clear()
+            del st.session_state["draft"]
+            st.success("Saved. Switch to Overview to see the result.")
+    if b2.button("Discard", use_container_width=True):
+        del st.session_state["draft"]
+        st.rerun()
+
 # --------------------------------------------------------------------------- #
 # Fit to one screen: scale the main area so its full height matches the window
 # --------------------------------------------------------------------------- #
@@ -502,7 +672,7 @@ if fit_screen and view == "Overview":
         height=0,
     )
 else:
-    # No scaling on the Graph view (Plotly sizes itself to the window) - undo any leftover transform.
+    # No scaling on the Graph/Edit views - undo any leftover transform.
     components.html(
         """<script>
         const m = window.parent.document.querySelector('.block-container');
